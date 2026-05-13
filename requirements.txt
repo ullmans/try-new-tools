@@ -1,1 +1,6 @@
-torch, pandas, scikit-learn
+numpy
+pandas
+matplotlib
+scikit-learn
+seaborn
+torch
