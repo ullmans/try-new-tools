@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+import matplotlib.pyplot as plt
+import datetime
 
 print("Checking for GPU...")
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -59,10 +61,11 @@ print(model)
 # Training setup
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
+train_losses = []  # List to store loss values for plotting
 
 # Train the model
 print("\nTraining the model...")
-num_epochs = 3
+num_epochs = 4  # Set to 1 for quick testing; increase for better performance
 for epoch in range(num_epochs):
     model.train()
     total_loss = 0
@@ -75,12 +78,28 @@ for epoch in range(num_epochs):
         loss.backward()
         optimizer.step()
         
+        train_losses.append(loss.item())  # Record loss for plotting
         total_loss += loss.item()
         if (batch_idx + 1) % 200 == 0:
             print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(train_loader)}], Loss: {loss.item():.4f}")
     
     avg_loss = total_loss / len(train_loader)
     print(f"Epoch {epoch+1} completed. Average Loss: {avg_loss:.4f}")
+
+# Plot the training loss curve
+print("\nPlotting training loss curve...")
+plt.figure(figsize=(10, 6))
+plt.plot(train_losses, label='Training Loss')
+plt.xlabel('Batch')
+plt.ylabel('Loss')
+plt.title('Training Loss Over Time')
+plt.legend()
+plt.grid(True)
+# timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+# filename = f'loss_curve_{timestamp}.png'
+filename = f'loss_curve.png'
+plt.savefig(filename)
+print(f"Loss curve saved as '{filename}' in the project directory")
 
 # Test the model
 print("\nTesting the model...")
