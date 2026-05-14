@@ -25,3 +25,6 @@ the actions to open a project like this are:
 12. run the code ("docker run --gpus all {image_name}")
 
 of course, there is the option not to use docker. in this case, just have to skip the irellevant step.
+
+so far, i made the model to recognize digits (of MNIST dataset).
+i would like to try and build a transformer and see what i can do with it
