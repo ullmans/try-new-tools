@@ -191,6 +191,7 @@ model.eval()
 
 # Generate 5 times
 print("\nGenerating text 5 times:\n")
+temperature = 1.0  # Higher = more random, Lower = more deterministic
 for i in range(5):
     
     # Start with the prompt
@@ -205,12 +206,13 @@ for i in range(5):
             # Take the last token's logits
             next_logits = logits[0, -1, :]
             
-            # Sample the next token (greedy: argmax)
-            next_token = torch.argmax(next_logits, dim=-1).unsqueeze(0).unsqueeze(0)
+            # Apply temperature scaling
+            next_logits = next_logits / temperature
             
-            # Append to sequence
+            # Sample from the distribution
+            probs = torch.softmax(next_logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1).unsqueeze(0)
             input_ids = torch.cat([input_ids, next_token], dim=1)
-    
     # Decode and print
     generated_tokens = input_ids[0].tolist()
     generated_text = enc.decode(generated_tokens)
