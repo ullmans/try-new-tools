@@ -250,9 +250,38 @@ if __name__ == "__main__":
             total_loss += loss.item()
             num_batches += 1
             
+            # print loss every 10 batches
             if (batch_idx + 1) % 10 == 0:
                 avg_loss = total_loss / num_batches
                 print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(dataloader)}], Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}")
+
+            # generate text every 250 batches
+            if (batch_idx + 1) % 250 == 0:
+                prompt = "Hello, I'm a language model,"
+                prompt_tokens = tokenizer.encode(prompt)
+                input_ids = torch.tensor([prompt_tokens], dtype=torch.long).to(device)
+                                
+                # Generate 100 more tokens
+                with torch.no_grad():
+                    for _ in range(100):
+                        if input_ids.shape[1] > config.block_size:
+                            # Keep only the last block_size tokens
+                            input_ids = input_ids[:, -config.block_size:]
+                        
+                        logits = model(input_ids)
+                        next_logits = logits[0, -1, :]
+                        
+                        # Temperature-based sampling
+                        next_logits = next_logits / 0.8  # temperature = 0.8
+                        probs = torch.softmax(next_logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1).unsqueeze(0)
+                        input_ids = torch.cat([input_ids, next_token], dim=1)
+                
+                # Decode and print
+                generated_tokens = input_ids[0].tolist()
+                generated_text = tokenizer.decode(generated_tokens)
+                print(f"{generated_text}'\n")
+               
         
         avg_loss = total_loss / num_batches
         print(f"\nEpoch {epoch+1} completed. Average Loss: {avg_loss:.4f}\n")
@@ -265,31 +294,31 @@ if __name__ == "__main__":
     model.eval()
     
     # Start with a prompt
-    prompt = "The quality of mercy"
-    prompt_tokens = tokenizer.encode(prompt)
-    input_ids = torch.tensor([prompt_tokens], dtype=torch.long).to(device)
+    # prompt = "The quality of mercy"
+    # prompt_tokens = tokenizer.encode(prompt)
+    # input_ids = torch.tensor([prompt_tokens], dtype=torch.long).to(device)
     
-    print(f"\nPrompt: '{prompt}'\n")
+    # print(f"\nPrompt: '{prompt}'\n")
     
-    # Generate 100 more tokens
-    with torch.no_grad():
-        for _ in range(100):
-            if input_ids.shape[1] > config.block_size:
-                # Keep only the last block_size tokens
-                input_ids = input_ids[:, -config.block_size:]
+    # # Generate 100 more tokens
+    # with torch.no_grad():
+    #     for _ in range(100):
+    #         if input_ids.shape[1] > config.block_size:
+    #             # Keep only the last block_size tokens
+    #             input_ids = input_ids[:, -config.block_size:]
             
-            logits = model(input_ids)
-            next_logits = logits[0, -1, :]
+    #         logits = model(input_ids)
+    #         next_logits = logits[0, -1, :]
             
-            # Temperature-based sampling
-            next_logits = next_logits / 0.8  # temperature = 0.8
-            probs = torch.softmax(next_logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1).unsqueeze(0)
-            input_ids = torch.cat([input_ids, next_token], dim=1)
+    #         # Temperature-based sampling
+    #         next_logits = next_logits / 0.8  # temperature = 0.8
+    #         probs = torch.softmax(next_logits, dim=-1)
+    #         next_token = torch.multinomial(probs, num_samples=1).unsqueeze(0)
+    #         input_ids = torch.cat([input_ids, next_token], dim=1)
     
-    # Decode and print
-    generated_tokens = input_ids[0].tolist()
-    generated_text = tokenizer.decode(generated_tokens)
-    print(f"Generated: '{generated_text}'\n")
+    # # Decode and print
+    # generated_tokens = input_ids[0].tolist()
+    # generated_text = tokenizer.decode(generated_tokens)
+    # print(f"Generated: '{generated_text}'\n")
     
     print("Training complete!")
