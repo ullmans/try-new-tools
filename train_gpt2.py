@@ -145,6 +145,7 @@ class Block(nn.Module):
         x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
+    
 class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -199,8 +200,8 @@ if __name__ == "__main__":
     # Create dataloader with your Shakespeare dataset
     dataloader, tokenizer = create_shakespeare_dataloader(
         file_path='shakespeare_dataset.txt',
-        batch_size=16,      # B = 16 samples per batch
-        seq_length=256,     # T = 256 tokens per sequence
+        batch_size=4,      # B = 16 samples per batch
+        seq_length=8,     # T = 256 tokens per sequence
         shuffle=True
     )
     
@@ -216,7 +217,7 @@ if __name__ == "__main__":
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     # ============== TRAINING SETUP ==============
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
     criterion = nn.CrossEntropyLoss()
     
     # ============== TRAINING LOOP ==============
@@ -236,8 +237,7 @@ if __name__ == "__main__":
             y = y.to(device)      # Shape: (B, T)
             
             # Forward pass
-            logits = model(x)     # Shape: (B, T, vocab_size)
-            
+            logits = model(x)     # Shape: (B, T, vocab_size)   
             # Compute loss
             # Reshape for cross entropy: (B*T, vocab_size) and (B*T,)
             loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
