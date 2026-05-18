@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
-# from torch.nn import functional as F
-# from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader
+import tiktoken
 
 @dataclass
 class GPTConfig:
@@ -13,6 +13,79 @@ class GPTConfig:
     n_embd: int = 768          # Dimensionality of embeddings
     bias: bool = True         # Whether to use bias in linear layers
     # dropout: float = 0.1       # Dropout rate
+
+
+class ShakespeareDataset(Dataset):
+    def __init__(self, file_path, seq_length=256, tokenizer=None):
+        """
+        Shakespeare dataset for language modeling.
+        
+        Args:
+            file_path: Path to the Shakespeare text file
+            seq_length: Sequence length T (context length for each sample)
+            tokenizer: tiktoken tokenizer. If None, uses gpt2 encoding.
+        """
+        # Load text
+        with open(file_path, 'r', encoding='utf-8') as f:
+            self.text = f.read()
+        
+        # Initialize tokenizer if not provided
+        if tokenizer is None:
+            self.tokenizer = tiktoken.get_encoding("gpt2")
+        else:
+            self.tokenizer = tokenizer
+        
+        # Tokenize the entire text
+        self.tokens = self.tokenizer.encode(self.text)
+        self.seq_length = seq_length
+        
+        print(f"Dataset loaded: {len(self.text)} characters, {len(self.tokens)} tokens")
+    
+    def __len__(self):
+        """Return number of possible sequences."""
+        return max(0, len(self.tokens) - self.seq_length)
+    
+    def __getitem__(self, idx):
+        """
+        Get a sequence and its target.
+        x: tokens at positions [idx, idx+seq_length)
+        y: tokens at positions [idx+1, idx+seq_length+1) (shifted by 1)
+        
+        This ensures y[i] is the expected next token after x[:i+1].
+        """
+        # Input sequence
+        x = torch.tensor(self.tokens[idx:idx + self.seq_length], dtype=torch.long)
+        
+        # Target sequence (shifted by 1)
+        y = torch.tensor(self.tokens[idx + 1:idx + self.seq_length + 1], dtype=torch.long)
+        
+        return x, y
+
+
+def create_shakespeare_dataloader(file_path, batch_size=32, seq_length=256, shuffle=True, num_workers=0):
+    """
+    Create a DataLoader for the Shakespeare dataset.
+    
+    Args:
+        file_path: Path to the Shakespeare text file
+        batch_size: Batch size B
+        seq_length: Sequence length T
+        shuffle: Whether to shuffle the dataset
+        num_workers: Number of worker processes for data loading
+    
+    Returns:
+        dataloader: PyTorch DataLoader
+        tokenizer: tiktoken tokenizer for encoding/decoding
+    """
+    tokenizer = tiktoken.get_encoding("gpt2")
+    dataset = ShakespeareDataset(file_path, seq_length=seq_length, tokenizer=tokenizer)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+    return dataloader, tokenizer
 
 
 class MyMultiheadAttention(nn.Module):
@@ -171,52 +244,111 @@ class GPT(nn.Module):
 
     #     return model
 
-model = GPT(GPTConfig())
-model.apply(model._init_weights)
-print("Model initialized with random parameters!")
 
-# Text generation code
-import tiktoken
-
-# Initialize tokenizer
-enc = tiktoken.get_encoding("gpt2")
-
-# Input text
-prompt = "Hello, I'm a language model,"
-prompt_tokens = enc.encode(prompt)
-prompt_tensor = torch.tensor([prompt_tokens], dtype=torch.long)
-
-# Set model to eval mode
-model.eval()
-
-# Generate 5 times
-print("\nGenerating text 5 times:\n")
-temperature = 1.0  # Higher = more random, Lower = more deterministic
-for i in range(5):
+if __name__ == "__main__":
+    # Device setup
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
     
-    # Start with the prompt
-    input_ids = prompt_tensor.clone()
+    # ============== CREATE DATALOADER ==============
+    print("\n" + "="*50)
+    print("Creating Shakespeare DataLoader...")
+    print("="*50)
     
-    # Generate 30 new tokens
-    with torch.no_grad():
-        for _ in range(30):
-            # Get logits from the model
-            logits = model(input_ids)
+    # Create dataloader with your Shakespeare dataset
+    dataloader, tokenizer = create_shakespeare_dataloader(
+        file_path='shakespeare_dataset.txt',
+        batch_size=16,      # B = 16 samples per batch
+        seq_length=256,     # T = 256 tokens per sequence
+        shuffle=True
+    )
+    
+    # Initialize model config
+    config = GPTConfig()
+    
+    # ============== INITIALIZE MODEL ==============
+    print("\n" + "="*50)
+    print("Initializing GPT Model...")
+    print("="*50)
+    model = GPT(config).to(device)
+    model.apply(model._init_weights)
+    print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
+    
+    # ============== TRAINING SETUP ==============
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+    criterion = nn.CrossEntropyLoss()
+    
+    # ============== TRAINING LOOP ==============
+    print("\n" + "="*50)
+    print("Starting Training...")
+    print("="*50)
+    
+    num_epochs = 2
+    for epoch in range(num_epochs):
+        model.train()
+        total_loss = 0
+        num_batches = 0
+        
+        for batch_idx, (x, y) in enumerate(dataloader):
+            # Move to device
+            x = x.to(device)      # Shape: (B, T)
+            y = y.to(device)      # Shape: (B, T)
             
-            # Take the last token's logits
+            # Forward pass
+            logits = model(x)     # Shape: (B, T, vocab_size)
+            
+            # Compute loss
+            # Reshape for cross entropy: (B*T, vocab_size) and (B*T,)
+            loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
+            
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            num_batches += 1
+            
+            if (batch_idx + 1) % 10 == 0:
+                avg_loss = total_loss / num_batches
+                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(dataloader)}], Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}")
+        
+        avg_loss = total_loss / num_batches
+        print(f"\nEpoch {epoch+1} completed. Average Loss: {avg_loss:.4f}\n")
+    
+    # ============== EXAMPLE: SAMPLE FROM MODEL ==============
+    print("\n" + "="*50)
+    print("Generating Text...")
+    print("="*50)
+    
+    model.eval()
+    
+    # Start with a prompt
+    prompt = "The quality of mercy"
+    prompt_tokens = tokenizer.encode(prompt)
+    input_ids = torch.tensor([prompt_tokens], dtype=torch.long).to(device)
+    
+    print(f"\nPrompt: '{prompt}'\n")
+    
+    # Generate 100 more tokens
+    with torch.no_grad():
+        for _ in range(100):
+            if input_ids.shape[1] > config.block_size:
+                # Keep only the last block_size tokens
+                input_ids = input_ids[:, -config.block_size:]
+            
+            logits = model(input_ids)
             next_logits = logits[0, -1, :]
             
-            # Apply temperature scaling
-            next_logits = next_logits / temperature
-            
-            # Sample from the distribution
+            # Temperature-based sampling
+            next_logits = next_logits / 0.8  # temperature = 0.8
             probs = torch.softmax(next_logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1).unsqueeze(0)
             input_ids = torch.cat([input_ids, next_token], dim=1)
+    
     # Decode and print
     generated_tokens = input_ids[0].tolist()
-    generated_text = enc.decode(generated_tokens)
-    print(generated_text)
-    print()
-
-print("didn't crash yay!!")
+    generated_text = tokenizer.decode(generated_tokens)
+    print(f"Generated: '{generated_text}'\n")
+    
+    print("Training complete!")
