@@ -12,4 +12,4 @@
     COPY . .
 
     # הפקודה שתרוץ (אפשר לשנות בהתאם לצורך)
-    CMD ["python", "app.py"]
+    CMD ["python", "train_gpt2.py"]
