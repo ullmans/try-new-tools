@@ -127,6 +127,7 @@ class MyMultiheadAttention(nn.Module):
 
         self.qkv_proj = nn.Linear(config.n_embd, 3 * config.n_embd)
         self.out_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.out_proj.NANOGPT_SCALE_INIT = 1  # Mark for special initialization
 
     def forward(self, x):
         batch_size, seq_length, embed_dim = x.size() # (B, T, C)
@@ -161,6 +162,7 @@ class MyMLP(nn.Module):
         x = self.gelu(x)
         # x = self.dropout(x)
         x = self.fc2(x)
+        self.fc2.NANOGPT_SCALE_INIT = 1  # Mark for special initialization
         # x = self.dropout(x)
         return x
     
@@ -194,7 +196,9 @@ class GPT(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # weight shering sceme
         self.lm_head.weight = self.transformer.wte.weight
-       
+        # init weights
+        self.apply(self._init_weights)
+
     def forward(self, idx):
         batch_size, seq_length = idx.size()
         assert seq_length <= self.config.block_size, "Sequence length exceeds block size"
@@ -216,7 +220,10 @@ class GPT(nn.Module):
     
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            std = 0.02
+            if hasattr(module, 'NANOGPT_SCALE_INIT'):
+                std *= (2 * self.config.n_layer) ** -0.5
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
@@ -227,6 +234,10 @@ if __name__ == "__main__":
     # Device setup
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
+
+    torch.manual_seed(1337)
+    if device == 'cuda':
+        torch.cuda.manual_seed_all(1337)
     
     # ============== CREATE DATALOADER ==============
     print("\n" + "="*50)
@@ -249,7 +260,6 @@ if __name__ == "__main__":
     print("Initializing GPT Model...")
     print("="*50)
     model = GPT(config).to(device)
-    model.apply(model._init_weights)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     # ============== TRAINING SETUP ==============
