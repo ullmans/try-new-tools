@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import tiktoken
 import random
+import time
 
 @dataclass
 class GPTConfig:
@@ -238,7 +239,8 @@ if __name__ == "__main__":
     torch.manual_seed(1337)
     if device == 'cuda':
         torch.cuda.manual_seed_all(1337)
-    
+        # Enable TF32 for faster computation on supported GPUs
+        torch.set_float32_matmul_precision('high')
     # ============== CREATE DATALOADER ==============
     print("\n" + "="*50)
     print("Creating Shakespeare DataLoader...")
@@ -247,8 +249,8 @@ if __name__ == "__main__":
     # Create dataloader with your dataset
     dataloader, tokenizer = create_dataloader(
         file_path='shakespeare_dataset.txt',
-        batch_size=4,      # B = 16 samples per batch
-        seq_length=32,     # T = 256 tokens per sequence
+        batch_size=16,      # B = 16 samples per batch
+        seq_length=1024,     # T = 256 tokens per sequence
         shuffle=True
     )
     
@@ -260,6 +262,7 @@ if __name__ == "__main__":
     print("Initializing GPT Model...")
     print("="*50)
     model = GPT(config).to(device)
+    model = torch.compile(model)  # Optional: compile the model for faster execution (PyTorch 2.0+)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     # ============== TRAINING SETUP ==============
@@ -278,28 +281,33 @@ if __name__ == "__main__":
         num_batches = 0
         
         for batch_idx, (x, y) in enumerate(dataloader):
+            t0 = time.time()
             # Move to device
             x = x.to(device)      # Shape: (B, T)
             y = y.to(device)      # Shape: (B, T)
             
-            # Forward pass
-            logits = model(x)     # Shape: (B, T, vocab_size)   
-            # Compute loss
-            # Reshape for cross entropy: (B*T, vocab_size) and (B*T,)
-            loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
+            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                # Forward pass
+                logits = model(x)     # Shape: (B, T, vocab_size)   
+                # Compute loss
+                # Reshape for cross entropy: (B*T, vocab_size) and (B*T,)
+                loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
             
             # Backward pass
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            
+            torch.cuda.synchronize()  # Ensure all CUDA operations are finished
+            t1 = time.time()
+            dt = (t1 - t0) * 1000  # Time in milliseconds
             total_loss += loss.item()
             num_batches += 1
             
             # print loss every 10 batches
-            if (batch_idx + 1) % 10 == 0:
-                avg_loss = total_loss / num_batches
-                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(dataloader)}], Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}")
+            # if (batch_idx + 1) % 10 == 0:
+            token_per_sec  = dataloader.batch_size * dataloader.dataset.seq_length / (dt / 1000)
+            avg_loss = total_loss / num_batches
+            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(dataloader)}], Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}, Time: {dt:.4f}ms, tok/sec: {token_per_sec:.2f}")
 
             # generate text every 250 batches
             if (batch_idx + 1) % 250 == 0:

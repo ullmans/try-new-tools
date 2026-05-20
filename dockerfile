@@ -4,6 +4,13 @@
     # הגדרת תיקיית עבודה בתוך הקונטיינר
     WORKDIR /app
 
+    # התקנת build tools הדרושים עבור Triton compilation
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        g++ \
+        && rm -rf /var/lib/apt/lists/*
+
     # העתקת רשימת הספריות והתקנתן
     COPY requirements.txt .
     RUN pip install --no-cache-dir -r requirements.txt
