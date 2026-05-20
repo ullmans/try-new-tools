@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+import math
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 import tiktoken
 import random
 import time
@@ -84,6 +86,39 @@ def create_dataloader(file_path, batch_size=32, seq_length=256, shuffle=True, nu
     dataloader = MyDataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return dataloader, tokenizer
 
+def current_lr(epoch, batch_idx, num_epochs, num_batches):
+    """
+    Compute the current learning rate with linear warmup and cosine decay.
+    
+    Args:
+        epoch: Current epoch number (0-indexed)
+        batch_idx: Current batch index within the epoch (0-indexed)
+        num_epochs: Total number of epochs
+        num_batches: Total number of batches per epoch
+    
+    Returns:
+        lr: Current learning rate
+    """
+    # Hyperparameters for learning rate schedule
+    max_lr = 6e-4
+    min_lr = 6e-5
+    warmup_iters = 10  # Number of iterations for linear warmup
+    total_iters = num_epochs * num_batches
+    # Compute current iteration
+    current_iter = epoch * num_batches + batch_idx + 1
+    
+    if current_iter < warmup_iters:
+        # Linear warmup
+        return max_lr * (current_iter / warmup_iters)
+    elif current_iter >= total_iters:
+        # After total_iters, keep the learning rate at a small value (e.g., 10% of max_lr)
+        return min_lr
+    else:
+        # Cosine decay
+        progress = (current_iter - warmup_iters) / (total_iters - warmup_iters)
+        coeff = 0.5 * (1 + math.cos(math.pi * progress))  # Cosine decay factor
+        return  min_lr + coeff * (max_lr - max_lr * 0.1)  # Decay from max_lr to 10% of max_lr
+
 
 class MyDataLoader:
     def __init__(self, dataset, batch_size=32, shuffle=True):
@@ -114,6 +149,7 @@ class MyDataLoader:
             yield torch.stack(batch_x), torch.stack(batch_y)
     
     def __len__(self):
+        """Return the number of batches per epoch."""
         return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
 
@@ -139,10 +175,8 @@ class MyMultiheadAttention(nn.Module):
         
         q, k, v = qkv[0], qkv[1], qkv[2]  # Each is (batch_size, n_head, seq_length, head_dim)
 
-        attn_weights = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)  # (batch_size, n_head, seq_length, seq_length)
-        attn_weights = torch.softmax(attn_weights, dim=-1)
-
-        attn_output = torch.matmul(attn_weights, v)  # (batch_size, n_head, seq_length, head_dim)
+        # using PyTorch's built-in scaled dot product attention with causal masking
+        attn_output = F.scaled_dot_product_attention(q, k, v, is_causal = True)  # (batch_size, seq_length, n_embd)
         attn_output = attn_output.permute(0, 2, 1, 3).contiguous()  # (batch_size, seq_length, n_head, head_dim)
         attn_output = attn_output.view(batch_size, seq_length, embed_dim)  # (batch_size, seq_length, n_embd)
 
@@ -255,7 +289,7 @@ if __name__ == "__main__":
     )
     
     # Initialize model config
-    config = GPTConfig()
+    config = GPTConfig(vocab_size=50304) # using friendlier number to speed up the training (instead of 50257)
     
     # ============== INITIALIZE MODEL ==============
     print("\n" + "="*50)
@@ -266,7 +300,7 @@ if __name__ == "__main__":
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     # ============== TRAINING SETUP ==============
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas = (0.9, 0.95), eps = 1e-8) # using the same hyperparameters as the original GPT-2 paper
     criterion = nn.CrossEntropyLoss()
     
     # ============== TRAINING LOOP ==============
@@ -285,6 +319,7 @@ if __name__ == "__main__":
             # Move to device
             x = x.to(device)      # Shape: (B, T)
             y = y.to(device)      # Shape: (B, T)
+            optimizer.zero_grad()
             
             with torch.autocast(device_type=device, dtype=torch.bfloat16):
                 # Forward pass
@@ -294,22 +329,26 @@ if __name__ == "__main__":
                 loss = criterion(logits.view(-1, logits.size(-1)), y.view(-1))
             
             # Backward pass
-            optimizer.zero_grad()
             loss.backward()
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
+
+            # Update learning rate for the current iteration
+            lr = current_lr(epoch, batch_idx, num_epochs, len(dataloader))
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
             optimizer.step()
+
             torch.cuda.synchronize()  # Ensure all CUDA operations are finished
             t1 = time.time()
             dt = (t1 - t0) * 1000  # Time in milliseconds
             total_loss += loss.item()
             num_batches += 1
             
-            # print loss every 10 batches
-            # if (batch_idx + 1) % 10 == 0:
             token_per_sec  = dataloader.batch_size * dataloader.dataset.seq_length / (dt / 1000)
             avg_loss = total_loss / num_batches
-            print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx+1}/{len(dataloader)}], Loss: {loss.item():.4f}, Avg Loss: {avg_loss:.4f}, Time: {dt:.4f}ms, tok/sec: {token_per_sec:.2f}")
+            print(f"step: {batch_idx + 1}, Loss: {loss.item():.4f}, lr: {lr:.2e}, norm: {norm:.4f}, Time: {dt:.4f}ms, tok/sec: {token_per_sec:.2f}")
 
-            # generate text every 250 batches
+            # generate text every 250 steps
             if (batch_idx + 1) % 250 == 0:
                 prompt = "Hello, I'm a language model,"
                 prompt_tokens = tokenizer.encode(prompt)
