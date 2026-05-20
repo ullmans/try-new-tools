@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import tiktoken
+import random
 
 @dataclass
 class GPTConfig:
@@ -15,13 +16,13 @@ class GPTConfig:
     # dropout: float = 0.1       # Dropout rate
 
 
-class ShakespeareDataset(Dataset):
+class MyDataset(Dataset):
     def __init__(self, file_path, seq_length=256, tokenizer=None):
         """
-        Shakespeare dataset for language modeling.
+        Custom dataset for language modeling.
         
         Args:
-            file_path: Path to the Shakespeare text file
+            file_path: Path to the text file
             seq_length: Sequence length T (context length for each sample)
             tokenizer: tiktoken tokenizer. If None, uses gpt2 encoding.
         """
@@ -62,12 +63,12 @@ class ShakespeareDataset(Dataset):
         return x, y
 
 
-def create_shakespeare_dataloader(file_path, batch_size=32, seq_length=256, shuffle=True, num_workers=0):
+def create_dataloader(file_path, batch_size=32, seq_length=256, shuffle=True, num_workers=0):
     """
-    Create a DataLoader for the Shakespeare dataset.
+    Create a DataLoader for the custom dataset.
     
     Args:
-        file_path: Path to the Shakespeare text file
+        file_path: Path to the text file
         batch_size: Batch size B
         seq_length: Sequence length T
         shuffle: Whether to shuffle the dataset
@@ -78,14 +79,41 @@ def create_shakespeare_dataloader(file_path, batch_size=32, seq_length=256, shuf
         tokenizer: tiktoken tokenizer for encoding/decoding
     """
     tokenizer = tiktoken.get_encoding("gpt2")
-    dataset = ShakespeareDataset(file_path, seq_length=seq_length, tokenizer=tokenizer)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers
-    )
+    dataset = MyDataset(file_path, seq_length=seq_length, tokenizer=tokenizer)
+    dataloader = MyDataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
     return dataloader, tokenizer
+
+
+class MyDataLoader:
+    def __init__(self, dataset, batch_size=32, shuffle=True):
+        """
+        Custom DataLoader that yields batches of (x, y) pairs.
+        Args:
+            dataset: An instance of MyDataset
+            batch_size: Number of samples per batch
+            shuffle: Whether to shuffle the data at the start of each epoch
+        """
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.indices = list(range(len(dataset)))
+    
+    def __iter__(self):
+        if self.shuffle:
+            random.shuffle(self.indices)
+        
+        for start_idx in range(0, len(self.indices), self.batch_size):
+            batch_indices = self.indices[start_idx:start_idx + self.batch_size]
+            batch_x = []
+            batch_y = []
+            for idx in batch_indices:
+                x, y = self.dataset[idx]
+                batch_x.append(x)
+                batch_y.append(y)
+            yield torch.stack(batch_x), torch.stack(batch_y)
+    
+    def __len__(self):
+        return (len(self.dataset) + self.batch_size - 1) // self.batch_size
 
 
 class MyMultiheadAttention(nn.Module):
@@ -118,6 +146,8 @@ class MyMultiheadAttention(nn.Module):
 
         output = self.out_proj(attn_output)  # (batch_size, seq_length, n_embd)
         return output
+    
+
 class MyMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -133,6 +163,8 @@ class MyMLP(nn.Module):
         x = self.fc2(x)
         # x = self.dropout(x)
         return x
+    
+
 class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -146,6 +178,7 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln2(x))
         return x
     
+
 class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -159,6 +192,8 @@ class GPT(nn.Module):
         ))
 
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # weight shering sceme
+        self.lm_head.weight = self.transformer.wte.weight
        
     def forward(self, idx):
         batch_size, seq_length = idx.size()
@@ -187,6 +222,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+
 if __name__ == "__main__":
     # Device setup
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -197,11 +233,11 @@ if __name__ == "__main__":
     print("Creating Shakespeare DataLoader...")
     print("="*50)
     
-    # Create dataloader with your Shakespeare dataset
-    dataloader, tokenizer = create_shakespeare_dataloader(
+    # Create dataloader with your dataset
+    dataloader, tokenizer = create_dataloader(
         file_path='shakespeare_dataset.txt',
         batch_size=4,      # B = 16 samples per batch
-        seq_length=8,     # T = 256 tokens per sequence
+        seq_length=32,     # T = 256 tokens per sequence
         shuffle=True
     )
     
@@ -288,7 +324,7 @@ if __name__ == "__main__":
     
     # ============== EXAMPLE: SAMPLE FROM MODEL ==============
     print("\n" + "="*50)
-    print("Generating Text...")
+    print("Generating Text...") 
     print("="*50)
     
     model.eval()
@@ -322,3 +358,4 @@ if __name__ == "__main__":
     # print(f"Generated: '{generated_text}'\n")
     
     print("Training complete!")
+x
